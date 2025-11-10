@@ -54,6 +54,10 @@ uint32_t partitioner::propagate(uint64_t placedNode, uint32_t placedNodePartitio
     maxDistFromPlacedPart = std::max(maxDistFromPlacedPart, fpgaGraphInstance.getNodeDistance(placedNodePartition, i));
   }
 
+  // Track changes for potential rollback
+  std::unordered_map<uint64_t, std::vector<uint32_t>> originalCandidatePartitions;
+  std::vector<uint64_t> nodesAddedToPropagated;
+
   std::queue<uint64_t> propagateQueue;
   propagateQueue.push(placedNode);
   while (!propagateQueue.empty()) {
@@ -75,20 +79,34 @@ uint32_t partitioner::propagate(uint64_t placedNode, uint32_t placedNodePartitio
         }
       }
 
+      // Save original candidate partitions before modifying (if not already saved)
+      if (!originalCandidatePartitions.contains(node.node)) {
+        originalCandidatePartitions[node.node] = candidatePartitions[node.node];
+      }
+
       // Update candidate list for this circuit node, with remaining legal placements
       std::vector<uint32_t>& candidatePartition = candidatePartitions[node.node];
       auto eraseNonlegalParts = std::remove_if(candidatePartition.begin(), candidatePartition.end(), [&legalPartitions](uint32_t part){return !legalPartitions.contains(part);});
       candidatePartition.erase(eraseNonlegalParts, candidatePartition.end());
 
-      // Based on candidate partition size, either terminate no solution or add this node to be propagated
+      // Based on candidate partition size, either add node to be propagated or back out / rollback illegal solution
       if (candidatePartition.size() == 1)
         propagateQueue.push(node.node);
-      else if (candidatePartition.size() == 0)
+      else if (candidatePartition.size() == 0) {
+        // Rollback all changes before returning
+        for (const auto& [nodeId, originalPartitions] : originalCandidatePartitions) {
+          candidatePartitions[nodeId] = originalPartitions;
+        }
+        for (uint64_t nodeId : nodesAddedToPropagated) {
+          propagatedNodes.erase(nodeId);
+        }
         return 1;
+      }
     }
 
     // Add node to list of propagated nodes
     propagatedNodes.insert(nodeToPropagate);
+    nodesAddedToPropagated.push_back(nodeToPropagate);
   }
   return 0;
 }
